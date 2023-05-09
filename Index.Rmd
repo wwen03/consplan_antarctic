@@ -1,0 +1,351 @@
+---
+title: 'Lab Tutorial: Making Conservation Planning Decisions in Antarctic'
+author: "Wen Wen/Mike Bode/Kerrie Wilson"
+date: "2023-04-26"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r knit_setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Outline
+
+-   Introduction \~ 5 min
+-   Data \~ 15 min
+-   Gap Analysis \~ 15 min
+-   Prioritization \~ 20 min
+-   Conclusion \~ 5 min
+
+## Learning Objectives
+
+-   To understand the core principles of conservation planning decisions.
+
+-   To provide the knowledge base to conduct conservation planning analyses.
+
+## Data Use Restriction
+
+*THIS LAB TUTORIAL DATA IS INTENDED ONLY FOR TRAINING PURPOSES AND NOT FOR FURTHER SCIENTIFIC PUBLICATION OR ANY LEGAL CLAIMS. THE DATA HEREIN HAS BEEN OBTAINED FROM SOURCES BELIEVED TO BE RELIABLE, BUT ITS ACCURACY AND COMPLETENESS, AND THE OPINIONS BASED THEREON, ARE NOT GUARANTEED.*
+
+# 1. Introduction
+
+In this tutorial, you are playing the role of a conservation planner, for which you have been tasked by the Antarctic Scientific Committee to evaluate the existing system of protected areas in the Australian Antarctic Territory (AAT), which are in Antarctic Conservation Biogeographic Regions (ACBR's) 7 and 16. In the analysis process, you will be using the prioritizr R package as a decision support tool for spatial conservation prioritization. Your task is to find new conservation areas that will protect the species of interest, while minimizing the overall cost.
+
+## 1.1 RMarkdown (.Rmd) & Tutorial Data
+
+The data for this tutorial has been provided in this [google drive link](https://drive.google.com/file/d/1HkmFzmvGev397RUXSRvpeUuIDG3L7gil/view?usp=share_link "LabTutorial"). After downloading this LabTutorial.zip, extract the files into a folder and titled "LabTutorial" folder.
+
+## 1.2 Setting up your computer
+
+You will need the latest stable version of the R program installed (i.e., version 4.2.2) and RStudio program. Please ensure you have administrative rights while installing these programs. After successfully installing the R program and RStudio, you will also need to install some of the following R packages (section 1.3). Open the RStudio application and then click Menu 'File' and Open Project... \\LabTutorial\\ConsPlan_Antarctic.Rproj (Index.Rmd will be loaded automatically on the panel source)
+
+## 1.3 R packages
+
+```{r install_packages, eval=FALSE, warning=FALSE, echo=TRUE}
+install.packages(
+  c("sf", "sp", "rgeos", "rgdal", "raster", "units", "prioritizr", 
+    "tidyverse", "terra", "mapview", "assertthat", "data.table", "gridExtra",
+    "Rsymphony"),
+  type = "binary", repos="https://cran.rstudio.com")
+```
+
+## 1.4 Load packages
+
+```{r load packages, echo=TRUE}
+library(prioritizr)
+library(sf)
+library(sp)
+library(raster)
+library(rgeos)
+library(assertthat)
+library(units)
+library(data.table)
+library(gridExtra)
+library(terra)
+library(mapview)
+library(tidyverse)
+library(Rsymphony)
+```
+
+## 1.5 Check your current working directory
+
+```{r check_directory, echo=TRUE}
+getwd()
+```
+
+# 2. Data
+
+## 2.1 Import planning unit layer & coastline
+
+```{r import_pu_layer, echo=TRUE}
+planning_unit <- st_read("pu_layer_antarctic.shp")
+coastline <- st_read("coastline.shp")
+```
+
+## 2.2 Format column in planning unit data (TRUE or FALSE)
+
+```{r format_column, echo=TRUE}
+planning_unit$locked_in <- as.logical(planning_unit$locked_in)
+planning_unit$locked_out <- as.logical(planning_unit$locked_out)
+```
+
+## 2.3 Plot the planning unit data
+
+```{r plot_planning_unit, echo=TRUE}
+plot(planning_unit)
+```
+
+## 2.4 Conservation Target Data
+
+### 2.4.1 South Polar Skua (*Stercorarius maccormicki*)
+
+```{r import_skua, echo=TRUE, fig.height=5, fig.width=5}
+skua <- terra::rast("skua2_raster.tif")
+print(skua)
+plot(skua, xlab = "meters", ylab = "meters")
+plot(st_geometry(coastline), add = TRUE, border = 'lightblue')
+```
+
+### 2.4.2 Moss (*Bryum pseudotriquetrum*)
+
+```{r import_moss, echo=TRUE, fig.height=5, fig.width=5}
+bryum <- terra::rast("bryum2_raster.tif")
+print(bryum)
+plot(bryum, xlab = "meters", ylab = "meters")
+plot(st_geometry(coastline), add = TRUE, border = 'lightblue')
+```
+
+### 2.4.3 Lichen (*Usnea antarctica* )
+
+```{r import_lichen, echo=TRUE, fig.height=5, fig.width=5}
+usnea <- terra::rast("usnea_raster.tif")
+print(usnea)
+plot(usnea, xlab = "meters", ylab = "meters")
+plot(st_geometry(coastline), add = TRUE, border = 'lightblue')
+```
+
+### 2.4.4 Emperor Penguin (*Aptenodytes forsteri*)
+
+```{r import_emperor, echo=TRUE, fig.height=5, fig.width=5}
+emperor <- terra::rast("emperor_raster.tif")
+print(emperor)
+plot(emperor, xlab = "meters", ylab = "meters")
+plot(st_geometry(coastline), add = TRUE, border = 'lightblue')
+```
+
+### 2.4.4 Resample species data
+
+```{r resample_species, echo=TRUE}
+emperor_resample <- terra::resample(emperor, skua, method="bilinear")
+print(emperor_resample)
+bryum_resample <- terra::resample(bryum, skua, method="bilinear")
+print(bryum_resample)
+```
+
+### 2.4.5 Combine all species data into single conservation target layer
+
+```{r combine_all_species, echo=TRUE, fig.height=10, fig.width=8}
+species <- c(usnea, skua, bryum_resample, emperor_resample)
+print(species)
+plot(species, xlab = "meters", ylab = "meters")
+```
+
+# 3. Feature representation
+
+We will try to identify how well species targets are represented by existing ASPAs. Let's create prioritizr problem with only the data.
+
+## 3.1 Null problem
+
+```{r null_problem, echo=TRUE}
+p0 <- problem(planning_unit, species, cost_column = "nocost") %>%
+      add_rsymphony_solver()
+summary(p0)
+```
+
+We will create a column in planning unit layer with binary values (zeros or ones) and this will indicate whether a planning unit is protected or not.
+
+## 3.2 Evaluate representation data
+
+```{r eval_representation, echo=TRUE}
+planning_unit$aspa_status <- as.numeric(planning_unit$locked_in)
+repr_data <- eval_feature_representation_summary(p0, planning_unit[, "aspa_status"] ) 
+print(repr_data)
+
+```
+
+We are going to add new column with the areas represented in km2 and then print the representative data.
+
+## 3.3 Convert the unit area into square km
+
+```{r convert_km_square, echo=TRUE}
+repr_data$absolute_held_km2 <-
+    (repr_data$absolute_held * prod(res(species))) %>%
+ set_units(m^2) %>%
+ set_units(km^2)
+
+print(repr_data)
+```
+
+Let's plot a bar chart of feature representation by existing ASPAs.
+
+## 3.4 Bar chart of feature representation
+
+```{r repr_barplot, echo=TRUE}
+barplot(repr_data$relative_held * 100,
+     main = "Feature representation by existing ASPAs",
+     xlim = c(0,5),
+     col = c("red", "green", "blue", "yellow"),
+     names.arg = repr_data$feature,
+     cex.names = 0.75,
+     xlab = "Percent coverage of features (%)",
+     ylab = "Frequency"
+)
+```
+
+# 4. Prioritization
+
+We will consider two prioritization scenarios in this exercise as shown in below table.
+
+|             | Relative Target | Lock In (Existing ASPA) | Cost            |
+|-------------|-----------------|-------------------------|-----------------|
+| Scenario I  | 10%             | No                      | No Cost/Equal   |
+| Scenario II | 30%             | Yes                     | Management Cost |
+
+: **Prioritization Scenarios**
+
+## 4.1 Prioritization 1st Scenario (Equal Cost + No Lock In + 10% Target)
+
+Here we will start to create a problem for prioritization and print it.
+
+### 4.1.1 Create Problem
+
+```{r define_problem_1, echo=TRUE}
+p1 <- problem(planning_unit, species, cost_column = "nocost") %>%
+      add_min_set_objective() %>%
+      add_relative_targets(0.10) %>%
+      add_binary_decisions() %>%
+      add_rsymphony_solver()
+summary(p1)
+```
+
+Let's solve the problem based on the first scenario and then print the result.
+
+### 4.1.2 Solve Problem
+
+```{r solve_1, echo=TRUE}
+s1 <- solve(p1)
+print(s1)
+```
+
+After solving the problem you can visualize the selected planning units using the following markdown code.
+
+### 4.1.3 Plot Solution Scenario 1
+
+```{r plot_solution_1, echo=TRUE}
+plot(st_as_sf(s1["solution_1"]),  main = "Scenario 1", pal = c("white", "#246424"), lwd = 0.01)
+```
+
+We will calculate the feature representation statistics based on the prioritization analysis for the first scenarios.
+
+### 4.1.4 Evaluate Target
+
+```{r eval_target_1, echo=TRUE}
+tc_s1 <- eval_target_coverage_summary(p1, s1[, "solution_1"])
+print(tc_s1)
+```
+
+As you can see on the summary table all species have met the minimum requirements that have been specified in the problem. Next, let's visualize the histogram for this first scenario so we can see the feature representation by this first prioritization.
+
+### 4.1.5 Create Barplot
+
+```{r scenario_1_barplot, echo=TRUE, fig.height=10, fig.width=8}
+barplot(
+  tc_s1$relative_held * 100,
+  main = "Feature representation by the first prioritization",
+  xlim = c(0, 5),
+  col = c("red","green", "blue", "yellow"),
+  names.arg = tc_s1$feature,
+  cex.names = 0.75,
+  xlab = "Percent coverage of features (%)",
+  ylab = "Frequency"
+)
+```
+
+## 4.2 Prioritization 2nd Scenario (Mgt Cost + Lock In + 30% Target)
+
+First we will define and print the prioritization problem.
+
+### 4.2.1 Create Problem
+
+```{r define_problem_2, echo=TRUE}
+p2 <- problem(planning_unit, species, cost_column = "mgtcost") %>%
+      add_min_set_objective() %>%
+      add_relative_targets(0.30) %>%
+      add_locked_in_constraints("locked_in") %>%
+      add_binary_decisions() %>%
+      add_rsymphony_solver()
+summary(p2)
+```
+
+Let's solve the problem based on the second scenario and then print the result.
+
+### 4.2.2 Solve Problem
+
+```{r solve_2, echo=TRUE}
+s2 <- solve(p2)
+print(s2)
+```
+
+Next, we will try to plot the solution on the map from this scenario to visualize the selected planning units and non-selected areas. Now, we can compare it and analyze the selection process based on two scenarios for the new ASPAs.
+
+### 4.2.3 Plot Solution Scenario 2
+
+```{r plot_solution_2, echo=TRUE}
+plot(st_as_sf(s2["solution_1"]), main = "Scenario 2", pal = c("white", "#246424"), lwd = 0.01)
+```
+
+We will also calculate the feature representation based on the second prioritization and we can identify how each feature has met the requirements.
+
+### 4.2.4 Evaluate Target
+
+```{r eval_target_2, echo=TRUE}
+tc_s2 <- eval_target_coverage_summary(p2, s2[, "solution_1"])
+print(tc_s2)
+```
+
+Let's plot the histogram for feature representation based on the second prioritization scenario. We will see that the feature targets are well represented in this second scenario.
+
+### 4.2.5 Create Barplot
+
+```{r scenario_2_barplot, echo=TRUE, fig.height=5, fig.width=10}
+barplot(
+  tc_s2$relative_held * 100,
+  main = "Feature representation by mgt cost + lock in + 30% target prioritization",
+  xlim = c(0, 5),
+  col = c("red","green", "blue", "yellow"),
+  names.arg = tc_s2$feature,
+  cex.names = 0.75,
+  xlab = "Percent coverage of features (%)",
+  ylab = "Frequency"
+)
+```
+
+## 4.3 Protected Areas Proposal (Scenario 1 + Scenario 2)
+
+Here we will combine two prioritization results based on the two scenarios.
+
+```{r final_proposal, echo=TRUE, fig.show='hold', out.width="50%"}
+par(mar = c(4, 4, .1, .1))
+plot(st_as_sf(s1["solution_1"]), pal = c("white", "#246424"), main = "Proposal 1", lwd = 0.01)
+plot(st_as_sf(s2["solution_1"]), pal = c("white", "blue"), main = "Proposal 2", lwd = 0.01)
+```
+
+# 5. Conclusion
+
+Congratulation! You have completed the lab tutorial on conservation planning.
+
+# 6. Acknowledgements
+
+Many thanks to the prioritizr team for providing the library package in this tutorial and to Isabella Todd and Aleks Terauds who are willing to share the species distribution model datasets for this exercise. We also thank the Australian Antarctic Data Centre for the Antarctic Specially Protected Areas shapefile and penguin colony data and the Securing Antarctic Environmental Future (SAEF) program which facilitated the implementation of this training.
